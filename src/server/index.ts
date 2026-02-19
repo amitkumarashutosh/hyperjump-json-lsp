@@ -5,6 +5,7 @@ import { documents } from "./documents.js";
 import { validateDocument } from "./diagnostics.js";
 import { registerSchema, DEFAULT_SCHEMA_URI } from "../json/schemaRegistry.js";
 import { getCompletions } from "../json/completion.js";
+import { getHover } from "../json/hover.js";
 
 // Hardcoded test schema
 const TEST_SCHEMA = {
@@ -53,6 +54,14 @@ connection.onCompletion((params) => {
     console.error("[completion] CRASHED:", err);
     return [];
   }
+});
+
+// Hover
+connection.onHover((params) => {
+  const document = documents.get(params.textDocument.uri);
+  if (!document) return null;
+
+  return getHover(document, params.position, TEST_SCHEMA);
 });
 
 // Document lifecycle
