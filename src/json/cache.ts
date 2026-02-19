@@ -1,5 +1,5 @@
 import { TextDocument } from "vscode-languageserver-textdocument";
-import { JSONDocument } from "./jsonDocument";
+import { JSONDocument } from "./jsonDocument.js";
 
 const cache = new Map<string, JSONDocument>();
 

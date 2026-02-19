@@ -12,7 +12,7 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
+  "type": "module",
   "dependencies": {
     "@hyperjump/json-schema": "^1.17.4",
     "jsonc-parser": "^3.3.1",

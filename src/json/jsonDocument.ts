@@ -1,6 +1,6 @@
 import { TextDocument } from "vscode-languageserver-textdocument";
 import { Node as JsonNode } from "jsonc-parser";
-import { parseJson, ParsedJson } from "./parser";
+import { parseJson, ParsedJson } from "./parser.js";
 
 export class JSONDocument {
   readonly uri: string;

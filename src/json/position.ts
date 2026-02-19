@@ -1,5 +1,5 @@
 import { TextDocument } from "vscode-languageserver-textdocument";
-import { Position } from "vscode-languageserver/node";
+import { Position } from "vscode-languageserver/node.js";
 
 export function positionToOffset(
   document: TextDocument,

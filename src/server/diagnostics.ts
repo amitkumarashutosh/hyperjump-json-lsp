@@ -1,11 +1,11 @@
-import { connection } from "./connection";
+import { connection } from "./connection.js";
 import { TextDocument } from "vscode-languageserver-textdocument";
-import { Diagnostic, DiagnosticSeverity } from "vscode-languageserver/node";
-import { getJSONDocument } from "../json/cache";
-import { normalizeErrors } from "../json/errors";
-import { validateInstance } from "../json/schemaValidator";
-import { resolveJsonPointer } from "../json/instancePath";
-import { DEFAULT_SCHEMA_URI } from "../json/schemaRegistry";
+import { Diagnostic, DiagnosticSeverity } from "vscode-languageserver/node.js";
+import { getJSONDocument } from "../json/cache.js";
+import { normalizeErrors } from "../json/errors.js";
+import { validateInstance } from "../json/schemaValidator.js";
+import { resolveJsonPointer } from "../json/instancePath.js";
+import { DEFAULT_SCHEMA_URI } from "../json/schemaRegistry.js";
 
 export async function validateDocument(document: TextDocument): Promise<void> {
   const jsonDoc = getJSONDocument(document);

@@ -4,7 +4,7 @@ import {
   InitializeParams,
   InitializeResult,
   TextDocumentSyncKind,
-} from "vscode-languageserver/node";
+} from "vscode-languageserver/node.js";
 
 export const connection = createConnection(ProposedFeatures.all);
 

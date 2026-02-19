@@ -1,9 +1,9 @@
 console.error("✅ Hyperjump JSON LSP Server Started");
 
-import { connection, handleInitialize } from "./connection";
-import { documents } from "./documents";
-import { validateDocument } from "./diagnostics";
-import { registerSchema, DEFAULT_SCHEMA_URI } from "../json/schemaRegistry";
+import { connection, handleInitialize } from "./connection.js";
+import { documents } from "./documents.js";
+import { validateDocument } from "./diagnostics.js";
+import { registerSchema, DEFAULT_SCHEMA_URI } from "../json/schemaRegistry.js";
 
 // Register a test schema so we can verify validation works end-to-end
 registerSchema({
@@ -23,11 +23,11 @@ registerSchema({
 connection.onInitialize(handleInitialize);
 
 // Document lifecycle
-documents.onDidChangeContent((change) => {
+documents.onDidChangeContent((change:any) => {
   validateDocument(change.document);
 });
 
-documents.onDidOpen((event) => {
+documents.onDidOpen((event:any) => {
   validateDocument(event.document);
 });
 
