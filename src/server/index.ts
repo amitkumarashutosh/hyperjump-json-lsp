@@ -4,13 +4,18 @@ import { connection, handleInitialize } from "./connection.js";
 import { documents } from "./documents.js";
 import { validateDocument } from "./diagnostics.js";
 import { registerSchema } from "../json/schemaRegistry.js";
-import { resolveSchema } from "../json/schemaResolver.js";
+import { resolveSchema, ResolvedSchema } from "../json/schemaResolver.js";
 import { fetchSchema } from "../json/schemaFetcher.js";
+import {
+  loadSchemaStoreCatalog,
+  resolveSchemaStoreSchema,
+} from "../json/schemaStore.js";
 import { getJSONDocument } from "../json/cache.js";
 import { getCompletions } from "../json/completion.js";
 import { getHover } from "../json/hover.js";
 import { getCodeActions } from "../json/codeActions.js";
 import { TextDocument } from "vscode-languageserver-textdocument";
+import { JSONDocument } from "../json/jsonDocument.js";
 
 // ── Register local schemas ────────────────────────────────────────────────────
 const PERSON_SCHEMA = {
@@ -40,48 +45,77 @@ registerSchema({
   pattern: "**/*.person.json",
 });
 
+// ── Load SchemaStore catalog at startup ───────────────────────────────────────
+loadSchemaStoreCatalog().catch((err) => {
+  console.error("[server] failed to load SchemaStore catalog:", err);
+});
+
 // ── Initialize ────────────────────────────────────────────────────────────────
 connection.onInitialize(handleInitialize);
+
+// ── Schema resolution with fetch ──────────────────────────────────────────────
+
+async function resolveSchemaWithFetch(
+  document: TextDocument,
+  jsonDoc: JSONDocument,
+): Promise<ResolvedSchema | null> {
+  let resolved = resolveSchema(document, jsonDoc);
+  if (resolved) return resolved;
+
+  const root = jsonDoc.root;
+  let inlineSchemaUri: string | undefined;
+
+  if (root?.type === "object") {
+    for (const prop of root.children ?? []) {
+      const keyNode = prop.children?.[0];
+      const valueNode = prop.children?.[1];
+
+      if (
+        keyNode?.value === "$schema" &&
+        valueNode?.type === "string" &&
+        typeof valueNode.value === "string"
+      ) {
+        inlineSchemaUri = valueNode.value;
+        break;
+      }
+    }
+  }
+
+  if (inlineSchemaUri) {
+    if (
+      inlineSchemaUri.startsWith("http://") ||
+      inlineSchemaUri.startsWith("https://")
+    ) {
+      console.error(
+        "[resolveWithFetch] waiting for inline schema:",
+        inlineSchemaUri,
+      );
+      await fetchSchema(inlineSchemaUri);
+      return resolveSchema(document, jsonDoc);
+    }
+    return null;
+  }
+
+  // No inline $schema — try SchemaStore by filename
+  console.error("[resolveWithFetch] trying SchemaStore for:", document.uri);
+  const schemaStore = await resolveSchemaStoreSchema(document.uri);
+  console.error("[resolveWithFetch] schemaStore result:", schemaStore);
+
+  if (schemaStore) {
+    return resolveSchema(document, jsonDoc);
+  }
+
+  return null;
+}
 
 // ── Completion ────────────────────────────────────────────────────────────────
 connection.onCompletion(async (params) => {
   try {
     const document = documents.get(params.textDocument.uri);
     if (!document) return [];
-
     const jsonDoc = getJSONDocument(document);
-
-    // Try to resolve immediately
-    let resolved = resolveSchema(document, jsonDoc);
-
-    // If not resolved yet, check if there's a remote $schema being fetched
-    // and wait for it briefly
-    if (!resolved) {
-      const root = jsonDoc.root;
-      if (root?.type === "object") {
-        for (const prop of root.children ?? []) {
-          const keyNode = prop.children?.[0];
-          const valueNode = prop.children?.[1];
-
-          if (
-            keyNode?.value === "$schema" &&
-            valueNode?.type === "string" &&
-            typeof valueNode.value === "string"
-          ) {
-            const uri = valueNode.value;
-            if (uri.startsWith("http://") || uri.startsWith("https://")) {
-              // Wait up to 5 seconds for the schema to load
-              await fetchSchema(uri);
-              resolved = resolveSchema(document, jsonDoc);
-            }
-            break;
-          }
-        }
-      }
-    }
-
+    const resolved = await resolveSchemaWithFetch(document, jsonDoc);
     if (!resolved) return [];
-
     return getCompletions(document, params.position, resolved.schema);
   } catch (err) {
     console.error("[completion] error:", err);
@@ -90,15 +124,13 @@ connection.onCompletion(async (params) => {
 });
 
 // ── Hover ─────────────────────────────────────────────────────────────────────
-connection.onHover((params) => {
+connection.onHover(async (params) => {
   try {
     const document = documents.get(params.textDocument.uri);
     if (!document) return null;
-
     const jsonDoc = getJSONDocument(document);
-    const resolved = resolveSchema(document, jsonDoc);
+    const resolved = await resolveSchemaWithFetch(document, jsonDoc);
     if (!resolved) return null;
-
     return getHover(document, params.position, resolved.schema);
   } catch (err) {
     console.error("[hover] error:", err);
@@ -107,15 +139,13 @@ connection.onHover((params) => {
 });
 
 // ── Code Actions ──────────────────────────────────────────────────────────────
-connection.onCodeAction((params) => {
+connection.onCodeAction(async (params) => {
   try {
     const document = documents.get(params.textDocument.uri);
     if (!document) return [];
-
     const jsonDoc = getJSONDocument(document);
-    const resolved = resolveSchema(document, jsonDoc);
+    const resolved = await resolveSchemaWithFetch(document, jsonDoc);
     if (!resolved) return [];
-
     return getCodeActions(
       document,
       params.context.diagnostics,
@@ -128,9 +158,6 @@ connection.onCodeAction((params) => {
 });
 
 // ── Document lifecycle ────────────────────────────────────────────────────────
-
-// Track which schema URIs have already triggered a re-validation
-// to prevent infinite loops
 const revalidatedUris = new Set<string>();
 
 async function validateWithRetry(document: TextDocument): Promise<void> {
@@ -138,38 +165,49 @@ async function validateWithRetry(document: TextDocument): Promise<void> {
 
   const jsonDoc = getJSONDocument(document);
   const root = jsonDoc.root;
-  if (!root || root.type !== "object") return;
+  let schemaUri: string | undefined;
 
-  for (const prop of root.children ?? []) {
-    const keyNode = prop.children?.[0];
-    const valueNode = prop.children?.[1];
+  if (root?.type === "object") {
+    for (const prop of root.children ?? []) {
+      const keyNode = prop.children?.[0];
+      const valueNode = prop.children?.[1];
 
-    if (
-      keyNode?.value === "$schema" &&
-      valueNode?.type === "string" &&
-      typeof valueNode.value === "string"
-    ) {
-      const uri = valueNode.value;
-
-      // Only fetch+revalidate once per URI per server session
       if (
-        (uri.startsWith("http://") || uri.startsWith("https://")) &&
-        !revalidatedUris.has(uri)
+        keyNode?.value === "$schema" &&
+        valueNode?.type === "string" &&
+        typeof valueNode.value === "string"
       ) {
-        revalidatedUris.add(uri);
-
-        fetchSchema(uri).then((schema) => {
-          if (schema) {
-            const doc = documents.get(document.uri);
-            if (doc) {
-              console.error("[server] re-validating after schema fetch:", uri);
-              validateDocument(doc);
-            }
-          }
-        });
+        schemaUri = valueNode.value;
+        break;
       }
-      break;
     }
+  }
+
+  // If no inline $schema, check SchemaStore
+  if (!schemaUri) {
+    const schemaStore = await resolveSchemaStoreSchema(document.uri);
+    if (schemaStore) schemaUri = schemaStore.uri;
+  }
+
+  if (
+    schemaUri &&
+    (schemaUri.startsWith("http://") || schemaUri.startsWith("https://")) &&
+    !revalidatedUris.has(schemaUri)
+  ) {
+    revalidatedUris.add(schemaUri);
+
+    fetchSchema(schemaUri).then((schema) => {
+      if (schema) {
+        const doc = documents.get(document.uri);
+        if (doc) {
+          console.error(
+            "[server] re-validating after schema fetch:",
+            schemaUri,
+          );
+          validateDocument(doc);
+        }
+      }
+    });
   }
 }
 

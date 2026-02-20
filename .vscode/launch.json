@@ -11,6 +11,7 @@
         "--user-data-dir=${workspaceFolder}/.vscode-dev-userdata",
         "--extensions-dir=${workspaceFolder}/.vscode-dev-extensions",
         "--disable-extension=vscode.json-language-features",
+        "--disable-extension=vscode.typescript-language-features",
         "${workspaceFolder}"
       ],
       "outFiles": ["${workspaceFolder}/client/dist/**/*.js"],

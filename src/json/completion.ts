@@ -2,9 +2,9 @@ import {
   CompletionItem,
   CompletionItemKind,
   InsertTextFormat,
+  Position,
 } from "vscode-languageserver/node.js";
 import { TextDocument } from "vscode-languageserver-textdocument";
-import { Position } from "vscode-languageserver/node.js";
 import { Node as JsonNode } from "jsonc-parser";
 import { getJSONDocument } from "./cache.js";
 import { getNodeAtOffset } from "./parser.js";
@@ -39,7 +39,10 @@ export function getCompletions(
   console.error("[completion] node type:", node?.type);
   console.error("[completion] node value:", node?.value);
   console.error("[completion] parent type:", node?.parent?.type);
-  console.error("[completion] context:", node ? getCompletionContext(node, offset, document) : "no node");
+  console.error(
+    "[completion] context:",
+    node ? getCompletionContext(node, offset, document) : "no node",
+  );
 
   if (!node) {
     console.error("[completion] bailing — no node at offset");
@@ -104,81 +107,89 @@ function getKeyCompletions(
 
   console.error("[keyCompletions] parentPath:", JSON.stringify(parentPath));
   console.error("[keyCompletions] subSchema:", !!subSchema);
-  console.error("[keyCompletions] properties count:", Object.keys(subSchema?.properties ?? {}).length);
+  console.error(
+    "[keyCompletions] properties count:",
+    Object.keys(subSchema?.properties ?? {}).length,
+  );
 
   if (!subSchema) return [];
 
   const properties = getSchemaProperties(subSchema);
-  console.error("[keyCompletions] properties from getSchemaProperties:", properties.slice(0, 5));
+
+  console.error(
+    "[keyCompletions] properties from getSchemaProperties:",
+    properties.slice(0, 5),
+  );
+
   if (properties.length === 0) return [];
 
   const existingKeys = getExistingKeys(root, parentPath);
+
+  // Remove the current node's value from existing keys
+  // because it's the key being typed right now — not a completed key
+  const currentValue = currentNode.value;
+  if (typeof currentValue === "string") {
+    existingKeys.delete(currentValue);
+  }
+
   console.error("[keyCompletions] existingKeys:", [...existingKeys]);
 
   const filtered = properties.filter((prop) => !existingKeys.has(prop));
   console.error("[keyCompletions] filtered count:", filtered.length);
 
-  // Replace from AFTER the opening quote to end of current token
-  // currentNode.offset points to the opening `"` — we skip it by +1
+  // Replace from after opening quote to before closing quote
   const replaceRange = {
     start: document.positionAt(currentNode.offset + 1),
-    end: document.positionAt(currentNode.offset + currentNode.length),
+    end: document.positionAt(currentNode.offset + currentNode.length - 1),
   };
 
-  return properties
-    .filter((prop) => !existingKeys.has(prop))
-    .map((prop) => {
-      const propSchema = getPropertySchema(subSchema, prop);
-      const required = isRequired(subSchema, prop);
-      const typeHint = getTypeHint(propSchema);
-      const type = Array.isArray(propSchema?.type)
-        ? propSchema?.type[0]
-        : propSchema?.type;
+  return filtered.map((prop) => {
+    const propSchema = getPropertySchema(subSchema, prop);
+    const required = isRequired(subSchema, prop);
+    const typeHint = getTypeHint(propSchema);
+    const type = Array.isArray(propSchema?.type)
+      ? propSchema?.type[0]
+      : propSchema?.type;
 
-      let valueSnippet: string;
-      switch (type) {
-        case "string":
-          valueSnippet = `"$1"`;
-          break;
-        case "number":
-        case "integer":
-          valueSnippet = `\${1:0}`;
-          break;
-        case "boolean":
-          valueSnippet = `\${1|true,false|}`;
-          break;
-        case "object":
-          valueSnippet = `{\n\t$1\n}`;
-          break;
-        case "array":
-          valueSnippet = `[$1]`;
-          break;
-        case "null":
-          valueSnippet = `null`;
-          break;
-        default:
-          valueSnippet = `$1`;
-      }
+    let valueSnippet: string;
+    switch (type) {
+      case "string":
+        valueSnippet = `"$1"`;
+        break;
+      case "number":
+      case "integer":
+        valueSnippet = `\${1:0}`;
+        break;
+      case "boolean":
+        valueSnippet = `\${1|true,false|}`;
+        break;
+      case "object":
+        valueSnippet = `{\n\t$1\n}`;
+        break;
+      case "array":
+        valueSnippet = `[$1]`;
+        break;
+      case "null":
+        valueSnippet = `null`;
+        break;
+      default:
+        valueSnippet = `$1`;
+    }
 
-      // Snippet starts AFTER the opening quote the user already typed
-      // So we insert: name": <value>
-      // Combined with the existing `"` = "name": <value>
-      const newText = `${prop}": ${valueSnippet}`;
-
-      return {
-        label: prop,
-        kind: CompletionItemKind.Property,
-        detail: typeHint,
-        documentation: (propSchema?.description as string) ?? undefined,
-        textEdit: {
-          range: replaceRange,
-          newText,
-        },
-        insertTextFormat: InsertTextFormat.Snippet,
-        filterText: prop,
-        sortText: required ? `0_${prop}` : `1_${prop}`,
-      };
-    });
+    return {
+      label: prop,
+      kind: CompletionItemKind.Property,
+      detail: typeHint,
+      documentation: (propSchema?.description as string) ?? undefined,
+      textEdit: {
+        range: replaceRange,
+        newText: `${prop}": ${valueSnippet}`,
+      },
+      insertTextFormat: InsertTextFormat.Snippet,
+      filterText: prop,
+      sortText: required ? `0_${prop}` : `1_${prop}`,
+    };
+  });
 }
 
 // ── Value Completions ────────────────────────────────────────────────────────

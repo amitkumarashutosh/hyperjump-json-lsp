@@ -2,6 +2,7 @@ import { TextDocument } from "vscode-languageserver-textdocument";
 import { JSONDocument } from "./jsonDocument.js";
 import { RawSchema } from "./schemaWalker.js";
 import { fetchSchema, getCachedSchema } from "./schemaFetcher.js";
+import { getSchemaStoreUri } from "./schemaStore.js";
 
 export interface SchemaAssociation {
   pattern: string;
@@ -26,11 +27,6 @@ export function registerSchemaAssociation(
   }
 }
 
-/**
- * Resolve the schema for a document synchronously.
- * If the schema needs to be fetched, triggers a background fetch
- * and returns null — the caller re-validates once loaded.
- */
 export function resolveSchema(
   document: TextDocument,
   jsonDoc: JSONDocument,
@@ -39,15 +35,12 @@ export function resolveSchema(
   const inlineUri = extractInlineSchemaUri(jsonDoc);
 
   if (inlineUri) {
-    // Check local registry first
     const local = schemasByUri.get(inlineUri);
     if (local) return { schema: local, uri: inlineUri };
 
-    // Check fetcher cache
     const cached = getCachedSchema(inlineUri);
     if (cached) return { schema: cached, uri: inlineUri };
 
-    // Not loaded yet — trigger background fetch
     fetchSchema(inlineUri).then((schema) => {
       if (schema) {
         console.error(`[resolver] schema loaded: ${inlineUri}`);
@@ -57,11 +50,27 @@ export function resolveSchema(
     return null;
   }
 
-  // ── Strategy 2: filename glob pattern ────────────────────────────────────
+  // ── Strategy 2: filename glob pattern (local) ─────────────────────────────
   for (const assoc of associations) {
     if (matchesPattern(document.uri, assoc.pattern)) {
       return { schema: assoc.schema, uri: assoc.uri };
     }
+  }
+
+  // ── Strategy 3: SchemaStore catalog ──────────────────────────────────────
+  const schemaStoreUri = getSchemaStoreUri(document.uri);
+  if (schemaStoreUri) {
+    const cached = getCachedSchema(schemaStoreUri);
+    if (cached) return { schema: cached, uri: schemaStoreUri };
+
+    // Trigger background fetch
+    fetchSchema(schemaStoreUri).then((schema) => {
+      if (schema) {
+        console.error(`[resolver] schemaStore schema loaded: ${schemaStoreUri}`);
+      }
+    });
+
+    return null;
   }
 
   return null;
