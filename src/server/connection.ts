@@ -17,6 +17,7 @@ export function handleInitialize(params: InitializeParams): InitializeResult {
         triggerCharacters: [":"],
       },
       hoverProvider: true,
+      codeActionProvider: true,
     },
   };
 }

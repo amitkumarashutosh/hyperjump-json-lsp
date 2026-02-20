@@ -8,6 +8,7 @@ import { resolveSchema } from "../json/schemaResolver.js";
 import { getJSONDocument } from "../json/cache.js";
 import { getCompletions } from "../json/completion.js";
 import { getHover } from "../json/hover.js";
+import { getCodeActions } from "../json/codeActions.js";
 
 // ── Register schemas ──────────────────────────────────────────────────────────
 // Each schema can have:
@@ -75,6 +76,26 @@ connection.onHover((params) => {
   } catch (err) {
     console.error("[hover] error:", err);
     return null;
+  }
+});
+
+connection.onCodeAction((params) => {
+  try {
+    const document = documents.get(params.textDocument.uri);
+    if (!document) return [];
+
+    const jsonDoc = getJSONDocument(document);
+    const resolved = resolveSchema(document, jsonDoc);
+    if (!resolved) return [];
+
+    return getCodeActions(
+      document,
+      params.context.diagnostics,
+      resolved.schema,
+    );
+  } catch (err) {
+    console.error("[codeAction] error:", err);
+    return [];
   }
 });
 
