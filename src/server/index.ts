@@ -5,16 +5,14 @@ import { documents } from "./documents.js";
 import { validateDocument } from "./diagnostics.js";
 import { registerSchema } from "../json/schemaRegistry.js";
 import { resolveSchema } from "../json/schemaResolver.js";
+import { fetchSchema } from "../json/schemaFetcher.js";
 import { getJSONDocument } from "../json/cache.js";
 import { getCompletions } from "../json/completion.js";
 import { getHover } from "../json/hover.js";
 import { getCodeActions } from "../json/codeActions.js";
+import { TextDocument } from "vscode-languageserver-textdocument";
 
-// ── Register schemas ──────────────────────────────────────────────────────────
-// Each schema can have:
-//   uri     — used for $schema inline resolution
-//   pattern — used for filename glob resolution
-
+// ── Register local schemas ────────────────────────────────────────────────────
 const PERSON_SCHEMA = {
   $schema: "http://json-schema.org/draft-07/schema#",
   type: "object" as const,
@@ -39,20 +37,49 @@ const PERSON_SCHEMA = {
 registerSchema({
   uri: "https://example.com/schemas/person.schema.json",
   schema: PERSON_SCHEMA,
-  pattern: "**/*.person.json", // also matches by filename
+  pattern: "**/*.person.json",
 });
 
 // ── Initialize ────────────────────────────────────────────────────────────────
 connection.onInitialize(handleInitialize);
 
 // ── Completion ────────────────────────────────────────────────────────────────
-connection.onCompletion((params) => {
+connection.onCompletion(async (params) => {
   try {
     const document = documents.get(params.textDocument.uri);
     if (!document) return [];
 
     const jsonDoc = getJSONDocument(document);
-    const resolved = resolveSchema(document, jsonDoc);
+
+    // Try to resolve immediately
+    let resolved = resolveSchema(document, jsonDoc);
+
+    // If not resolved yet, check if there's a remote $schema being fetched
+    // and wait for it briefly
+    if (!resolved) {
+      const root = jsonDoc.root;
+      if (root?.type === "object") {
+        for (const prop of root.children ?? []) {
+          const keyNode = prop.children?.[0];
+          const valueNode = prop.children?.[1];
+
+          if (
+            keyNode?.value === "$schema" &&
+            valueNode?.type === "string" &&
+            typeof valueNode.value === "string"
+          ) {
+            const uri = valueNode.value;
+            if (uri.startsWith("http://") || uri.startsWith("https://")) {
+              // Wait up to 5 seconds for the schema to load
+              await fetchSchema(uri);
+              resolved = resolveSchema(document, jsonDoc);
+            }
+            break;
+          }
+        }
+      }
+    }
+
     if (!resolved) return [];
 
     return getCompletions(document, params.position, resolved.schema);
@@ -62,7 +89,7 @@ connection.onCompletion((params) => {
   }
 });
 
-// Hover
+// ── Hover ─────────────────────────────────────────────────────────────────────
 connection.onHover((params) => {
   try {
     const document = documents.get(params.textDocument.uri);
@@ -79,6 +106,7 @@ connection.onHover((params) => {
   }
 });
 
+// ── Code Actions ──────────────────────────────────────────────────────────────
 connection.onCodeAction((params) => {
   try {
     const document = documents.get(params.textDocument.uri);
@@ -100,12 +128,57 @@ connection.onCodeAction((params) => {
 });
 
 // ── Document lifecycle ────────────────────────────────────────────────────────
+
+// Track which schema URIs have already triggered a re-validation
+// to prevent infinite loops
+const revalidatedUris = new Set<string>();
+
+async function validateWithRetry(document: TextDocument): Promise<void> {
+  await validateDocument(document);
+
+  const jsonDoc = getJSONDocument(document);
+  const root = jsonDoc.root;
+  if (!root || root.type !== "object") return;
+
+  for (const prop of root.children ?? []) {
+    const keyNode = prop.children?.[0];
+    const valueNode = prop.children?.[1];
+
+    if (
+      keyNode?.value === "$schema" &&
+      valueNode?.type === "string" &&
+      typeof valueNode.value === "string"
+    ) {
+      const uri = valueNode.value;
+
+      // Only fetch+revalidate once per URI per server session
+      if (
+        (uri.startsWith("http://") || uri.startsWith("https://")) &&
+        !revalidatedUris.has(uri)
+      ) {
+        revalidatedUris.add(uri);
+
+        fetchSchema(uri).then((schema) => {
+          if (schema) {
+            const doc = documents.get(document.uri);
+            if (doc) {
+              console.error("[server] re-validating after schema fetch:", uri);
+              validateDocument(doc);
+            }
+          }
+        });
+      }
+      break;
+    }
+  }
+}
+
 documents.onDidChangeContent((change) => {
-  validateDocument(change.document);
+  validateWithRetry(change.document);
 });
 
 documents.onDidOpen((event) => {
-  validateDocument(event.document);
+  validateWithRetry(event.document);
 });
 
 documents.listen(connection);

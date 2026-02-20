@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "tsx src/server/index.ts --stdio",
-    "build": "tsc",
+    "build": "tsc && cd client && tsc",
     "start": "node dist/server/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -18,11 +18,13 @@
   "dependencies": {
     "@hyperjump/json-schema": "^1.17.4",
     "jsonc-parser": "^3.3.1",
+    "node-fetch": "^3.3.2",
     "vscode-languageserver": "^9.0.1",
     "vscode-languageserver-textdocument": "^1.0.12"
   },
   "devDependencies": {
     "@types/node": "^25.2.3",
+    "@types/node-fetch": "^2.6.13",
     "@vitest/coverage-v8": "^4.0.18",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",

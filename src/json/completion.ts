@@ -35,12 +35,11 @@ export function getCompletions(
   }
 
   const node = getNodeAtOffset(root, offset);
-  console.error(
-    "[completion] node:",
-    node?.type,
-    "parent:",
-    node?.parent?.type,
-  );
+  console.error("[completion] offset:", offset);
+  console.error("[completion] node type:", node?.type);
+  console.error("[completion] node value:", node?.value);
+  console.error("[completion] parent type:", node?.parent?.type);
+  console.error("[completion] context:", node ? getCompletionContext(node, offset, document) : "no node");
 
   if (!node) {
     console.error("[completion] bailing — no node at offset");
@@ -103,12 +102,21 @@ function getKeyCompletions(
   const parentPath = path.slice(0, -1);
   const subSchema = walkSchema(schema, parentPath);
 
+  console.error("[keyCompletions] parentPath:", JSON.stringify(parentPath));
+  console.error("[keyCompletions] subSchema:", !!subSchema);
+  console.error("[keyCompletions] properties count:", Object.keys(subSchema?.properties ?? {}).length);
+
   if (!subSchema) return [];
 
   const properties = getSchemaProperties(subSchema);
+  console.error("[keyCompletions] properties from getSchemaProperties:", properties.slice(0, 5));
   if (properties.length === 0) return [];
 
   const existingKeys = getExistingKeys(root, parentPath);
+  console.error("[keyCompletions] existingKeys:", [...existingKeys]);
+
+  const filtered = properties.filter((prop) => !existingKeys.has(prop));
+  console.error("[keyCompletions] filtered count:", filtered.length);
 
   // Replace from AFTER the opening quote to end of current token
   // currentNode.offset points to the opening `"` — we skip it by +1
