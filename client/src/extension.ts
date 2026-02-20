@@ -30,7 +30,9 @@ export function activate(context: vscode.ExtensionContext) {
   };
 
   const clientOptions: LanguageClientOptions = {
-    documentSelector: [{ scheme: "file", language: "json" }],
+    documentSelector: [
+      { scheme: "file", language: "json", pattern: "**/*.json" },
+    ],
   };
 
   client = new LanguageClient(

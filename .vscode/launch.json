@@ -10,7 +10,8 @@
         "--extensionDevelopmentPath=${workspaceFolder}/client",
         "--user-data-dir=${workspaceFolder}/.vscode-dev-userdata",
         "--extensions-dir=${workspaceFolder}/.vscode-dev-extensions",
-        "--disable-extension=vscode.json-language-features"
+        "--disable-extension=vscode.json-language-features",
+        "${workspaceFolder}"
       ],
       "outFiles": ["${workspaceFolder}/client/dist/**/*.js"],
       "preLaunchTask": "Build All"

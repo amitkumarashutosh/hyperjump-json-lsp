@@ -3,14 +3,20 @@ console.error("✅ Hyperjump JSON LSP Server Started");
 import { connection, handleInitialize } from "./connection.js";
 import { documents } from "./documents.js";
 import { validateDocument } from "./diagnostics.js";
-import { registerSchema, DEFAULT_SCHEMA_URI } from "../json/schemaRegistry.js";
+import { registerSchema } from "../json/schemaRegistry.js";
+import { resolveSchema } from "../json/schemaResolver.js";
+import { getJSONDocument } from "../json/cache.js";
 import { getCompletions } from "../json/completion.js";
 import { getHover } from "../json/hover.js";
 
-// Hardcoded test schema
-const TEST_SCHEMA = {
+// ── Register schemas ──────────────────────────────────────────────────────────
+// Each schema can have:
+//   uri     — used for $schema inline resolution
+//   pattern — used for filename glob resolution
+
+const PERSON_SCHEMA = {
   $schema: "http://json-schema.org/draft-07/schema#",
-  type: "object",
+  type: "object" as const,
   properties: {
     name: { type: "string", description: "The person's full name" },
     age: { type: "number", description: "Age in years" },
@@ -30,41 +36,49 @@ const TEST_SCHEMA = {
 };
 
 registerSchema({
-  uri: DEFAULT_SCHEMA_URI,
-  schema: TEST_SCHEMA,
+  uri: "https://example.com/schemas/person.schema.json",
+  schema: PERSON_SCHEMA,
+  pattern: "**/*.person.json", // also matches by filename
 });
 
-// Initialize
+// ── Initialize ────────────────────────────────────────────────────────────────
 connection.onInitialize(handleInitialize);
 
+// ── Completion ────────────────────────────────────────────────────────────────
 connection.onCompletion((params) => {
-  console.error("[completion] CALLED at", JSON.stringify(params.position));
-
   try {
     const document = documents.get(params.textDocument.uri);
-    if (!document) {
-      console.error("[completion] no document found");
-      return [];
-    }
+    if (!document) return [];
 
-    const items = getCompletions(document, params.position, TEST_SCHEMA);
-    console.error("[completion] items returned:", items.length);
-    return items;
+    const jsonDoc = getJSONDocument(document);
+    const resolved = resolveSchema(document, jsonDoc);
+    if (!resolved) return [];
+
+    return getCompletions(document, params.position, resolved.schema);
   } catch (err) {
-    console.error("[completion] CRASHED:", err);
+    console.error("[completion] error:", err);
     return [];
   }
 });
 
 // Hover
 connection.onHover((params) => {
-  const document = documents.get(params.textDocument.uri);
-  if (!document) return null;
+  try {
+    const document = documents.get(params.textDocument.uri);
+    if (!document) return null;
 
-  return getHover(document, params.position, TEST_SCHEMA);
+    const jsonDoc = getJSONDocument(document);
+    const resolved = resolveSchema(document, jsonDoc);
+    if (!resolved) return null;
+
+    return getHover(document, params.position, resolved.schema);
+  } catch (err) {
+    console.error("[hover] error:", err);
+    return null;
+  }
 });
 
-// Document lifecycle
+// ── Document lifecycle ────────────────────────────────────────────────────────
 documents.onDidChangeContent((change) => {
   validateDocument(change.document);
 });
