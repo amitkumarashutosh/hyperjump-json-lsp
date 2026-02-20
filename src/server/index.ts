@@ -25,7 +25,11 @@ const PERSON_SCHEMA = {
     name: { type: "string", description: "The person's full name" },
     age: { type: "number", description: "Age in years" },
     active: { type: "boolean", description: "Whether the account is active" },
-    address: {
+    address: { $ref: "#/definitions/Address" },
+  },
+  required: ["name"],
+  definitions: {
+    Address: {
       type: "object",
       description: "Mailing address",
       properties: {
@@ -36,7 +40,6 @@ const PERSON_SCHEMA = {
       required: ["city"],
     },
   },
-  required: ["name"],
 };
 
 registerSchema({
