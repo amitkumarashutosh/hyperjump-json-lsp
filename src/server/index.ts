@@ -22,6 +22,8 @@ import { getHover } from "../json/hover.js";
 import { getCodeActions } from "../json/codeActions.js";
 import { TextDocument } from "vscode-languageserver-textdocument";
 import { JSONDocument } from "../json/jsonDocument.js";
+import { getDocumentSymbols } from "../json/documentSymbols.js";
+import { formatDocument, formatRange } from "../json/formatter.js";
 
 // ── Register local schemas ────────────────────────────────────────────────────
 const PERSON_SCHEMA = {
@@ -207,6 +209,39 @@ connection.onCodeAction(async (params) => {
     );
   } catch (err) {
     console.error("[codeAction] error:", err);
+    return [];
+  }
+});
+
+connection.onDocumentSymbol((params) => {
+  try {
+    const document = documents.get(params.textDocument.uri);
+    if (!document) return [];
+    return getDocumentSymbols(document);
+  } catch (err) {
+    console.error("[documentSymbol] error:", err);
+    return [];
+  }
+});
+
+connection.onDocumentFormatting((params) => {
+  try {
+    const document = documents.get(params.textDocument.uri);
+    if (!document) return [];
+    return formatDocument(document, params.options);
+  } catch (err) {
+    console.error("[formatting] error:", err);
+    return [];
+  }
+});
+
+connection.onDocumentRangeFormatting((params) => {
+  try {
+    const document = documents.get(params.textDocument.uri);
+    if (!document) return [];
+    return formatRange(document, params.range, params.options);
+  } catch (err) {
+    console.error("[rangeFormatting] error:", err);
     return [];
   }
 });

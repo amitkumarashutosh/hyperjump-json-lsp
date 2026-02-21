@@ -18,6 +18,9 @@ export function handleInitialize(params: InitializeParams): InitializeResult {
       },
       hoverProvider: true,
       codeActionProvider: true,
+      documentSymbolProvider: true,
+      documentFormattingProvider: true,
+      documentRangeFormattingProvider: true,
     },
   };
 }
