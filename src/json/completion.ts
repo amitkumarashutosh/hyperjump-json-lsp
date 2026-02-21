@@ -2,6 +2,7 @@ import {
   CompletionItem,
   CompletionItemKind,
   InsertTextFormat,
+  MarkupKind,
   Position,
 } from "vscode-languageserver/node.js";
 import { TextDocument } from "vscode-languageserver-textdocument";
@@ -13,6 +14,9 @@ import {
   getSchemaProperties,
   getPropertySchema,
   isRequired,
+  getDefaultSnippets,
+  getDescription,
+  DefaultSnippet,
   RawSchema,
 } from "./schemaWalker.js";
 
@@ -60,7 +64,7 @@ export function getCompletions(
   }
 
   if (context === "value") {
-    return getValueCompletions(path, schema);
+    return getValueCompletions(path, schema, document, node);
   }
 
   console.error("[completion] context was none — no completions");
@@ -76,19 +80,39 @@ function getCompletionContext(
   offset: number,
   document: TextDocument,
 ): CompletionContext {
+  // String in key or value position
   if (node.type === "string" && node.parent?.type === "property") {
     const keyNode = node.parent.children?.[0];
     if (keyNode === node) return "key";
     return "value";
   }
 
-  if (node.type === "object") return "key";
-  if (node.type === "property") return "key";
-
-  if (node.parent?.type === "property") {
-    const valueNode = node.parent.children?.[1];
-    if (valueNode === node) return "value";
+  // Non-string value node in value position
+  if (node.parent?.type === "property" && node.parent.children?.[1] === node) {
+    return "value";
   }
+
+  // Property node — check if cursor is past the colon (value position)
+  if (node.type === "property") {
+    const keyNode = node.children?.[0];
+    const valueNode = node.children?.[1];
+
+    if (keyNode && !valueNode) {
+      // No value yet — cursor is after key, suggest value
+      const keyEnd = keyNode.offset + keyNode.length;
+      const text = document.getText();
+      const slice = text.slice(keyEnd, offset);
+      if (slice.includes(":")) return "value";
+    }
+
+    if (valueNode && offset >= valueNode.offset) {
+      return "value";
+    }
+
+    return "key";
+  }
+
+  if (node.type === "object") return "key";
 
   return "none";
 }
@@ -114,6 +138,27 @@ function getKeyCompletions(
 
   if (!subSchema) return [];
 
+  const items: CompletionItem[] = [];
+
+  // ── defaultSnippets at this level ────────────────────────────────────────
+  const snippets = getDefaultSnippets(subSchema);
+  for (const snippet of snippets) {
+    const snippetText = bodyToSnippet(snippet.body);
+    const description =
+      snippet.markdownDescription ?? snippet.description ?? "";
+
+    items.push({
+      label: snippet.label ?? snippetText,
+      kind: CompletionItemKind.Snippet,
+      detail: "snippet",
+      documentation: description,
+      insertText: snippetText,
+      insertTextFormat: InsertTextFormat.Snippet,
+      sortText: `0_snippet_${snippet.label ?? ""}`,
+    });
+  }
+
+  // ── Regular property completions ─────────────────────────────────────────
   const properties = getSchemaProperties(subSchema);
 
   console.error(
@@ -121,12 +166,10 @@ function getKeyCompletions(
     properties.slice(0, 5),
   );
 
-  if (properties.length === 0) return [];
+  if (properties.length === 0 && items.length === 0) return [];
 
   const existingKeys = getExistingKeys(root, parentPath);
 
-  // Remove the current node's value from existing keys
-  // because it's the key being typed right now — not a completed key
   const currentValue = currentNode.value;
   if (typeof currentValue === "string") {
     existingKeys.delete(currentValue);
@@ -137,50 +180,63 @@ function getKeyCompletions(
   const filtered = properties.filter((prop) => !existingKeys.has(prop));
   console.error("[keyCompletions] filtered count:", filtered.length);
 
-  // Replace from after opening quote to before closing quote
   const replaceRange = {
     start: document.positionAt(currentNode.offset + 1),
     end: document.positionAt(currentNode.offset + currentNode.length - 1),
   };
 
-  return filtered.map((prop) => {
+  for (const prop of filtered) {
     const propSchema = getPropertySchema(subSchema, prop);
     const required = isRequired(subSchema, prop);
     const typeHint = getTypeHint(propSchema);
+    const description = getDescription(propSchema ?? {});
     const type = Array.isArray(propSchema?.type)
       ? propSchema?.type[0]
       : propSchema?.type;
 
+    // Check for defaultSnippets on the property schema
+    const propSnippets = propSchema ? getDefaultSnippets(propSchema) : [];
     let valueSnippet: string;
-    switch (type) {
-      case "string":
-        valueSnippet = `"$1"`;
-        break;
-      case "number":
-      case "integer":
-        valueSnippet = `\${1:0}`;
-        break;
-      case "boolean":
-        valueSnippet = `\${1|true,false|}`;
-        break;
-      case "object":
-        valueSnippet = `{\n\t$1\n}`;
-        break;
-      case "array":
-        valueSnippet = `[$1]`;
-        break;
-      case "null":
-        valueSnippet = `null`;
-        break;
-      default:
-        valueSnippet = `$1`;
+
+    if (propSnippets.length > 0 && propSnippets[0]) {
+      // Use first defaultSnippet as the value
+      valueSnippet = bodyToSnippet(propSnippets[0].body);
+    } else {
+      switch (type) {
+        case "string":
+          valueSnippet = `"$1"`;
+          break;
+        case "number":
+        case "integer":
+          valueSnippet = `\${1:0}`;
+          break;
+        case "boolean":
+          valueSnippet = `\${1|true,false|}`;
+          break;
+        case "object":
+          valueSnippet = `{\n\t$1\n}`;
+          break;
+        case "array":
+          valueSnippet = `[$1]`;
+          break;
+        case "null":
+          valueSnippet = `null`;
+          break;
+        default:
+          valueSnippet = `$1`;
+      }
     }
 
-    return {
+    items.push({
       label: prop,
       kind: CompletionItemKind.Property,
       detail: typeHint,
-      documentation: (propSchema?.description as string) ?? undefined,
+      ...(description !== undefined && {
+        documentation: {
+          kind: MarkupKind.Markdown,
+          value: description,
+        },
+      }),
       textEdit: {
         range: replaceRange,
         newText: `${prop}": ${valueSnippet}`,
@@ -188,8 +244,10 @@ function getKeyCompletions(
       insertTextFormat: InsertTextFormat.Snippet,
       filterText: prop,
       sortText: required ? `0_${prop}` : `1_${prop}`,
-    };
-  });
+    });
+  }
+
+  return items;
 }
 
 // ── Value Completions ────────────────────────────────────────────────────────
@@ -197,12 +255,32 @@ function getKeyCompletions(
 function getValueCompletions(
   path: string[],
   schema: RawSchema,
+  document: TextDocument,
+  currentNode: JsonNode,
 ): CompletionItem[] {
   const subSchema = walkSchema(schema, path);
   if (!subSchema) return [];
 
   const items: CompletionItem[] = [];
 
+  // ── defaultSnippets on the value schema ──────────────────────────────────
+  const snippets = getDefaultSnippets(subSchema);
+  for (const snippet of snippets) {
+    const snippetText = bodyToSnippet(snippet.body);
+    const description =
+      snippet.markdownDescription ?? snippet.description ?? "";
+
+    items.push({
+      label: snippet.label ?? snippetText,
+      kind: CompletionItemKind.Snippet,
+      documentation: description,
+      insertText: snippetText,
+      insertTextFormat: InsertTextFormat.Snippet,
+      sortText: `0_snippet_${snippet.label ?? ""}`,
+    });
+  }
+
+  // ── Enum values ───────────────────────────────────────────────────────────
   if (subSchema.enum) {
     for (const value of subSchema.enum) {
       items.push({
@@ -215,6 +293,7 @@ function getValueCompletions(
     return items;
   }
 
+  // ── Type-based suggestions ────────────────────────────────────────────────
   const types = Array.isArray(subSchema.type)
     ? subSchema.type
     : subSchema.type
@@ -271,9 +350,53 @@ function getValueCompletions(
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+/**
+ * Convert a defaultSnippet body to a VSCode snippet string.
+ * Handles nested objects/arrays recursively.
+ */
+function bodyToSnippet(body: unknown, indent = ""): string {
+  if (body === null) return "null";
+  if (typeof body === "boolean") return String(body);
+  if (typeof body === "number") return String(body);
+  if (typeof body === "string") {
+    // Already a snippet string — pass through
+    return body;
+  }
+
+  if (Array.isArray(body)) {
+    if (body.length === 0) return "[]";
+    const innerIndent = indent + "\t";
+    const items = body
+      .map((item) => `${innerIndent}${bodyToSnippet(item, innerIndent)}`)
+      .join(",\n");
+    return `[\n${items}\n${indent}]`;
+  }
+
+  if (typeof body === "object") {
+    const entries = Object.entries(body as Record<string, unknown>);
+    if (entries.length === 0) return "{}";
+    const innerIndent = indent + "\t";
+    const props = entries
+      .map(([k, v]) => `${innerIndent}"${k}": ${bodyToSnippet(v, innerIndent)}`)
+      .join(",\n");
+    return `{\n${props}\n${indent}}`;
+  }
+
+  return String(body);
+}
+
 function getPathToNode(node: JsonNode, root: JsonNode): string[] {
   const path: string[] = [];
   let current: JsonNode | undefined = node;
+
+  // If we're on a property node itself, include its key in the path
+  if (current.type === "property") {
+    const keyNode = current.children?.[0];
+    if (keyNode?.value !== undefined) {
+      path.unshift(String(keyNode.value));
+    }
+    current = current.parent;
+  }
 
   while (current && current !== root) {
     const parent: any = current.parent;

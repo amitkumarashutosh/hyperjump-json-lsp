@@ -28,12 +28,48 @@ const PERSON_SCHEMA = {
   $schema: "http://json-schema.org/draft-07/schema#",
   type: "object" as const,
   properties: {
-    name: { type: "string", description: "The person's full name" },
-    age: { type: "number", description: "Age in years" },
+    name: {
+      type: "string",
+      markdownDescription: "The person's **full name** — _first and last_",
+      errorMessage: "Name must be a string",
+    },
+    age: {
+      type: "number",
+      description: "Age in years",
+      errorMessage: "Age must be a number",
+    },
     active: { type: "boolean", description: "Whether the account is active" },
     address: {
+      $ref: "#/definitions/Address",
+      defaultSnippets: [
+        {
+          label: "Full address",
+          description: "Insert a complete address",
+          body: {
+            street: "$1",
+            city: "$2",
+            zip: "$3",
+          },
+        },
+      ],
+    },
+  },
+  required: ["name"],
+  definitions: {
+    Address: {
       type: "object",
       description: "Mailing address",
+      defaultSnippets: [
+        {
+          label: "Full address",
+          description: "Insert a complete address",
+          body: {
+            street: "$1",
+            city: "$2",
+            zip: "$3",
+          },
+        },
+      ],
       properties: {
         street: { type: "string" },
         city: { type: "string" },
@@ -42,7 +78,6 @@ const PERSON_SCHEMA = {
       required: ["city"],
     },
   },
-  required: ["name"],
 };
 
 registerSchema({

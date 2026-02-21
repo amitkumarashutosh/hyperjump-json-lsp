@@ -8,6 +8,8 @@ import {
   walkSchema,
   getPropertySchema,
   isRequired,
+  getDescription,
+  getErrorMessage,
   RawSchema,
 } from "./schemaWalker.js";
 
@@ -24,21 +26,14 @@ export function getHover(
   const node = getNodeAtOffset(root, offset);
   if (!node) return null;
 
-  // Get the path to this node
   const path = getPathToNode(node, root);
   if (path.length === 0) return null;
 
-  // Determine if we are hovering over a key or a value
   const isKey =
     node.type === "string" &&
     node.parent?.type === "property" &&
     node.parent.children?.[0] === node;
 
-  // For key hover: show info about the property itself
-  // For value hover: show info about the value's schema
-  const schemaPath = isKey ? path : path;
-
-  // Walk to the parent schema to get property metadata
   const parentPath = path.slice(0, -1);
   const propertyName = path[path.length - 1];
 
@@ -51,8 +46,6 @@ export function getHover(
   if (!propSchema) return null;
 
   const required = isRequired(parentSchema, propertyName);
-
-  // Build the hover markdown
   const content = buildHoverContent(propertyName, propSchema, required);
 
   return {
@@ -82,9 +75,17 @@ function buildHoverContent(
   lines.push(`**${name}** \`${type}\`${requiredBadge}`);
   lines.push("");
 
-  // Description
-  if (schema.description && typeof schema.description === "string") {
-    lines.push(schema.description);
+  // Description — prefers markdownDescription over description
+  const description = getDescription(schema);
+  if (description) {
+    lines.push(description);
+    lines.push("");
+  }
+
+  // Error message hint (if schema has custom errorMessage)
+  const errorMsg = getErrorMessage(schema);
+  if (errorMsg) {
+    lines.push(`> ⚠️ ${errorMsg}`);
     lines.push("");
   }
 
@@ -103,7 +104,7 @@ function buildHoverContent(
     lines.push("");
   }
 
-  // Min/max for numbers
+  // Constraints
   if (schema.minimum !== undefined) {
     lines.push(`**Minimum:** \`${schema.minimum}\``);
   }
@@ -130,8 +131,6 @@ function getTypeDisplay(schema: RawSchema): string {
   if (schema.properties) return "object";
   return "any";
 }
-
-// ── Path Helper (same logic as completion.ts) ────────────────────────────────
 
 function getPathToNode(node: JsonNode, root: JsonNode): string[] {
   const path: string[] = [];

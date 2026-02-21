@@ -6,7 +6,7 @@ import { normalizeErrors } from "../json/errors.js";
 import { validateInstance } from "../json/schemaValidator.js";
 import { resolveJsonPointer } from "../json/instancePath.js";
 import { resolveSchema } from "../json/schemaResolver.js";
-import { JSONDocument } from "../json/jsonDocument.js";
+import { walkSchema, getErrorMessage } from "../json/schemaWalker.js";
 
 export async function validateDocument(document: TextDocument): Promise<void> {
   const jsonDoc = getJSONDocument(document);
@@ -49,10 +49,25 @@ export async function validateDocument(document: TextDocument): Promise<void> {
           ? document.positionAt(node.offset + node.length)
           : { line: 0, character: 0 };
 
+        // ── Custom errorMessage support ─────────────────────────────────
+        // Check if the schema at this path has a custom errorMessage
+        const pathSegments = error.instancePath.split("/").filter(Boolean);
+
+        const propSchema =
+          pathSegments.length > 0
+            ? walkSchema(resolved.schema, pathSegments)
+            : undefined;
+
+        const customMessage = propSchema
+          ? getErrorMessage(propSchema, error.keyword)
+          : undefined;
+
+        const message = customMessage ?? error.message;
+
         diagnostics.push({
           severity: DiagnosticSeverity.Error,
           range: { start, end },
-          message: error.message,
+          message,
           source: "hyperjump-json-lsp",
         });
       }

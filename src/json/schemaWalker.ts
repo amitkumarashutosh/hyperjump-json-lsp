@@ -1,5 +1,12 @@
 import { resolveSchema as resolveRef } from "./refResolver.js";
 
+export interface DefaultSnippet {
+  label?: string;
+  description?: string;
+  markdownDescription?: string;
+  body: unknown;
+}
+
 export interface RawSchema {
   type?: string | string[];
   properties?: Record<string, unknown>;
@@ -14,6 +21,9 @@ export interface RawSchema {
   anyOf?: unknown[];
   oneOf?: unknown[];
   description?: string;
+  markdownDescription?: string;
+  errorMessage?: string | Record<string, string>;
+  defaultSnippets?: DefaultSnippet[];
   default?: unknown;
   minimum?: number;
   maximum?: number;
@@ -32,10 +42,7 @@ export function walkSchema(
   path: string[],
   rootSchema?: RawSchema,
 ): RawSchema | undefined {
-  // Use schema itself as root if not provided
   const root = rootSchema ?? schema;
-
-  // Resolve $ref at current level
   const resolved = resolveRef(schema, root);
 
   if (path.length === 0) return resolved;
@@ -43,7 +50,6 @@ export function walkSchema(
   const [head, ...tail] = path;
   if (!head) return resolved;
 
-  // Object property
   if (resolved.properties && head in resolved.properties) {
     const sub = resolved.properties[head];
     if (isRawSchema(sub)) {
@@ -52,7 +58,6 @@ export function walkSchema(
     return undefined;
   }
 
-  // Array items
   if (resolved.items) {
     const index = parseInt(head, 10);
     if (!isNaN(index) && isRawSchema(resolved.items)) {
@@ -74,7 +79,6 @@ export function getSchemaProperties(
   const root = rootSchema ?? schema;
   const resolved = resolveRef(schema, root);
 
-  // Merge properties from allOf/anyOf/oneOf
   const allProps = new Set<string>();
 
   if (resolved.properties) {
@@ -83,8 +87,17 @@ export function getSchemaProperties(
     }
   }
 
-  // Also collect from allOf
   for (const sub of resolved.allOf ?? []) {
+    if (isRawSchema(sub)) {
+      const subResolved = resolveRef(sub, root);
+      for (const key of Object.keys(subResolved.properties ?? {})) {
+        allProps.add(key);
+      }
+    }
+  }
+
+  // Also collect from anyOf/oneOf branches
+  for (const sub of [...(resolved.anyOf ?? []), ...(resolved.oneOf ?? [])]) {
     if (isRawSchema(sub)) {
       const subResolved = resolveRef(sub, root);
       for (const key of Object.keys(subResolved.properties ?? {})) {
@@ -125,6 +138,17 @@ export function getPropertySchema(
     }
   }
 
+  // Check anyOf / oneOf branches
+  for (const s of [...(resolved.anyOf ?? []), ...(resolved.oneOf ?? [])]) {
+    if (isRawSchema(s)) {
+      const subResolved = resolveRef(s, root);
+      const prop = subResolved.properties?.[property];
+      if (isRawSchema(prop)) {
+        return resolveRef(prop, root);
+      }
+    }
+  }
+
   return undefined;
 }
 
@@ -135,6 +159,46 @@ export function isRequired(schema: RawSchema, property: string): boolean {
   return schema.required?.includes(property) ?? false;
 }
 
-function isRawSchema(value: unknown): value is RawSchema {
+/**
+ * Get the best description for a schema — prefers markdownDescription.
+ */
+export function getDescription(schema: RawSchema): string | undefined {
+  if (typeof schema.markdownDescription === "string") {
+    return schema.markdownDescription;
+  }
+  if (typeof schema.description === "string") {
+    return schema.description;
+  }
+  return undefined;
+}
+
+/**
+ * Get the error message for a specific keyword or the general error message.
+ */
+export function getErrorMessage(
+  schema: RawSchema,
+  keyword?: string,
+): string | undefined {
+  if (!schema.errorMessage) return undefined;
+
+  if (typeof schema.errorMessage === "string") {
+    return schema.errorMessage;
+  }
+
+  if (keyword && typeof schema.errorMessage === "object") {
+    return (schema.errorMessage as Record<string, string>)[keyword];
+  }
+
+  return undefined;
+}
+
+/**
+ * Get defaultSnippets for a schema.
+ */
+export function getDefaultSnippets(schema: RawSchema): DefaultSnippet[] {
+  return schema.defaultSnippets ?? [];
+}
+
+export function isRawSchema(value: unknown): value is RawSchema {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
