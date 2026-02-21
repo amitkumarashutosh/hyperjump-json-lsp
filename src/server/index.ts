@@ -1,3 +1,9 @@
+import "@hyperjump/json-schema/draft-04";
+import "@hyperjump/json-schema/draft-06";
+import "@hyperjump/json-schema/draft-07";
+import "@hyperjump/json-schema/draft-2019-09";
+import "@hyperjump/json-schema/draft-2020-12";
+
 console.error("✅ Hyperjump JSON LSP Server Started");
 
 import { connection, handleInitialize } from "./connection.js";
@@ -25,11 +31,7 @@ const PERSON_SCHEMA = {
     name: { type: "string", description: "The person's full name" },
     age: { type: "number", description: "Age in years" },
     active: { type: "boolean", description: "Whether the account is active" },
-    address: { $ref: "#/definitions/Address" },
-  },
-  required: ["name"],
-  definitions: {
-    Address: {
+    address: {
       type: "object",
       description: "Mailing address",
       properties: {
@@ -40,12 +42,26 @@ const PERSON_SCHEMA = {
       required: ["city"],
     },
   },
+  required: ["name"],
 };
 
 registerSchema({
   uri: "https://example.com/schemas/person.schema.json",
   schema: PERSON_SCHEMA,
   pattern: "**/*.person.json",
+});
+
+registerSchema({
+  uri: "https://example.com/schemas/modern.schema.json",
+  schema: {
+    $schema: "https://json-schema.org/draft/2020-12/schema",
+    type: "object",
+    properties: {
+      name: { type: "string", description: "Full name" },
+    },
+    required: ["name"],
+  },
+  pattern: "**/*.modern.json",
 });
 
 // ── Load SchemaStore catalog at startup ───────────────────────────────────────

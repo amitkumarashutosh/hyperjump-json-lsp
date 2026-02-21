@@ -1,4 +1,5 @@
-import "@hyperjump/json-schema/draft-07";
+import { detectDraft, JsonSchemaDraft } from "./draftDetector.js";
+import { RawSchema } from "./schemaWalker.js";
 import {
   annotate,
   ValidationError,
@@ -15,10 +16,21 @@ export interface ValidationResult {
   errors: ValidationError_[];
 }
 
+/**
+ * Validate a plain JS value against a registered schema URI.
+ * Automatically detects and uses the correct draft.
+ */
 export async function validateInstance(
   schemaUri: string,
   instance: unknown,
+  schema?: RawSchema,
 ): Promise<ValidationResult> {
+  // Ensure the correct draft module is loaded
+  if (schema) {
+    const draft = detectDraft(schema);
+    await loadDraftModule(draft);
+  }
+
   try {
     await annotate(schemaUri, instance as any);
     return { valid: true, errors: [] };
@@ -44,6 +56,30 @@ export async function validateInstance(
 
     console.error("[schemaValidator] Unexpected error:", err);
     return { valid: true, errors: [] };
+  }
+}
+
+/**
+ * Dynamically import the correct Hyperjump draft module.
+ * Each import registers the draft's keywords with Hyperjump globally.
+ */
+async function loadDraftModule(draft: JsonSchemaDraft): Promise<void> {
+  switch (draft) {
+    case "draft-04":
+      await import("@hyperjump/json-schema/draft-04");
+      break;
+    case "draft-06":
+      await import("@hyperjump/json-schema/draft-06");
+      break;
+    case "draft-07":
+      await import("@hyperjump/json-schema/draft-07");
+      break;
+    case "draft-2019-09":
+      await import("@hyperjump/json-schema/draft-2019-09");
+      break;
+    case "draft-2020-12":
+      await import("@hyperjump/json-schema/draft-2020-12");
+      break;
   }
 }
 

@@ -33,7 +33,11 @@ export async function validateDocument(document: TextDocument): Promise<void> {
 
     if (resolved) {
       const instance = astToValue(jsonDoc.root);
-      const result = await validateInstance(resolved.uri, instance);
+      const result = await validateInstance(
+        resolved.uri,
+        instance,
+        resolved.schema,
+      );
 
       for (const error of result.errors) {
         const node = resolveJsonPointer(jsonDoc.root, error.instancePath);

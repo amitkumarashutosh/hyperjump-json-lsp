@@ -4,7 +4,6 @@ import { registerSchemaAssociation } from "./schemaResolver.js";
 import { RawSchema } from "./schemaWalker.js";
 
 // Teach Hyperjump how to fetch https:// URIs and handle application/json
-// by intercepting the retrieve function and returning a proper Response
 addUriSchemePlugin("https", {
   retrieve: async (uri: string) => {
     const response = await fetch(uri, {
@@ -15,8 +14,6 @@ addUriSchemePlugin("https", {
       signal: AbortSignal.timeout(10_000),
     });
 
-    // Clone response but override content-type so Hyperjump
-    // treats it as application/schema+json which it understands
     const text = await response.text();
     return new Response(text, {
       status: response.status,
@@ -46,6 +43,18 @@ addUriSchemePlugin("http", {
     });
   },
 });
+
+// Meta-schema URIs that should never be fetched as document schemas
+const META_SCHEMA_URIS = new Set([
+  "http://json-schema.org/draft-04/schema#",
+  "http://json-schema.org/draft-04/schema",
+  "http://json-schema.org/draft-06/schema#",
+  "http://json-schema.org/draft-06/schema",
+  "http://json-schema.org/draft-07/schema#",
+  "http://json-schema.org/draft-07/schema",
+  "https://json-schema.org/draft/2019-09/schema",
+  "https://json-schema.org/draft/2020-12/schema",
+]);
 
 // Cache: URI → resolved schema
 const schemaCache = new Map<string, RawSchema>();
@@ -107,6 +116,12 @@ export function clearSchemaCache(): void {
 
 async function doFetch(uri: string): Promise<RawSchema | null> {
   if (!uri.startsWith("http://") && !uri.startsWith("https://")) {
+    return null;
+  }
+
+  // Never fetch meta-schema URIs — they are draft identifiers, not document schemas
+  if (META_SCHEMA_URIS.has(uri)) {
+    console.error(`[schemaFetcher] skipping meta-schema URI: ${uri}`);
     return null;
   }
 
