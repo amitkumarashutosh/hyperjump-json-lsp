@@ -1,4 +1,4 @@
-import { resolveSchema as resolveRef } from "./refResolver.js";
+import { resolveSchema as resolveRef, buildIdIndex } from "./refResolver.js";
 
 export interface DefaultSnippet {
   label?: string;
@@ -15,6 +15,9 @@ export interface RawSchema {
   required?: string[];
   additionalProperties?: unknown;
   $ref?: string;
+  $dynamicRef?: string;
+  $dynamicAnchor?: string;
+  $id?: string;
   definitions?: Record<string, unknown>;
   $defs?: Record<string, unknown>;
   allOf?: unknown[];
@@ -35,7 +38,8 @@ export interface RawSchema {
 
 /**
  * Walk a schema along a path of segments.
- * Resolves $ref at each step.
+ * Resolves $ref and $dynamicRef at each step.
+ * Uses $id index for URI-based resolution.
  */
 export function walkSchema(
   schema: RawSchema,
@@ -69,8 +73,8 @@ export function walkSchema(
 }
 
 /**
- * Get all property names defined in a schema's `properties` keyword.
- * Resolves $ref before reading properties.
+ * Get all property names defined in a schema.
+ * Resolves $ref, $dynamicRef, allOf, anyOf, oneOf.
  */
 export function getSchemaProperties(
   schema: RawSchema,
@@ -87,21 +91,28 @@ export function getSchemaProperties(
     }
   }
 
-  for (const sub of resolved.allOf ?? []) {
+  for (const sub of [
+    ...(resolved.allOf ?? []),
+    ...(resolved.anyOf ?? []),
+    ...(resolved.oneOf ?? []),
+  ]) {
     if (isRawSchema(sub)) {
       const subResolved = resolveRef(sub, root);
       for (const key of Object.keys(subResolved.properties ?? {})) {
         allProps.add(key);
       }
-    }
-  }
-
-  // Also collect from anyOf/oneOf branches
-  for (const sub of [...(resolved.anyOf ?? []), ...(resolved.oneOf ?? [])]) {
-    if (isRawSchema(sub)) {
-      const subResolved = resolveRef(sub, root);
-      for (const key of Object.keys(subResolved.properties ?? {})) {
-        allProps.add(key);
+      // Recurse into nested combiners
+      for (const nested of [
+        ...(subResolved.allOf ?? []),
+        ...(subResolved.anyOf ?? []),
+        ...(subResolved.oneOf ?? []),
+      ]) {
+        if (isRawSchema(nested)) {
+          const nestedResolved = resolveRef(nested, root);
+          for (const key of Object.keys(nestedResolved.properties ?? {})) {
+            allProps.add(key);
+          }
+        }
       }
     }
   }
@@ -111,7 +122,6 @@ export function getSchemaProperties(
 
 /**
  * Get the subschema for a specific property.
- * Resolves $ref before reading properties.
  */
 export function getPropertySchema(
   schema: RawSchema,
@@ -121,25 +131,16 @@ export function getPropertySchema(
   const root = rootSchema ?? schema;
   const resolved = resolveRef(schema, root);
 
-  // Check direct properties
   const sub = resolved.properties?.[property];
   if (isRawSchema(sub)) {
     return resolveRef(sub, root);
   }
 
-  // Check allOf
-  for (const s of resolved.allOf ?? []) {
-    if (isRawSchema(s)) {
-      const subResolved = resolveRef(s, root);
-      const prop = subResolved.properties?.[property];
-      if (isRawSchema(prop)) {
-        return resolveRef(prop, root);
-      }
-    }
-  }
-
-  // Check anyOf / oneOf branches
-  for (const s of [...(resolved.anyOf ?? []), ...(resolved.oneOf ?? [])]) {
+  for (const s of [
+    ...(resolved.allOf ?? []),
+    ...(resolved.anyOf ?? []),
+    ...(resolved.oneOf ?? []),
+  ]) {
     if (isRawSchema(s)) {
       const subResolved = resolveRef(s, root);
       const prop = subResolved.properties?.[property];
@@ -160,7 +161,7 @@ export function isRequired(schema: RawSchema, property: string): boolean {
 }
 
 /**
- * Get the best description for a schema — prefers markdownDescription.
+ * Get the best description for a schema.
  */
 export function getDescription(schema: RawSchema): string | undefined {
   if (typeof schema.markdownDescription === "string") {
@@ -173,7 +174,7 @@ export function getDescription(schema: RawSchema): string | undefined {
 }
 
 /**
- * Get the error message for a specific keyword or the general error message.
+ * Get the error message for a specific keyword.
  */
 export function getErrorMessage(
   schema: RawSchema,

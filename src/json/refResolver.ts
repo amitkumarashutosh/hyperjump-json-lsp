@@ -2,23 +2,19 @@ import { RawSchema } from "./schemaWalker.js";
 
 /**
  * Resolve a $ref pointer against a root schema.
- * Only handles local refs starting with "#".
- *
- * e.g. "#/definitions/Address" → schema.definitions.Address
- * e.g. "#/$defs/Address" → schema.$defs.Address
+ * Handles:
+ * - Local refs: "#/definitions/Foo"
+ * - $id-based refs: resolves against schema with matching $id
+ * - Root ref: "#"
  */
 export function resolveRef(
   ref: string,
   rootSchema: RawSchema,
 ): RawSchema | undefined {
-  // Only handle local refs
   if (!ref.startsWith("#")) return undefined;
-
-  // "#" alone means the root schema
   if (ref === "#") return rootSchema;
 
-  // Strip the leading "#/" and split into segments
-  const pointer = ref.slice(2); // remove "#/"
+  const pointer = ref.slice(2);
   const segments = pointer.split("/").map(decodePointerSegment);
 
   let current: unknown = rootSchema;
@@ -33,6 +29,67 @@ export function resolveRef(
 }
 
 /**
+ * Resolve a $dynamicRef against a root schema.
+ * $dynamicRef uses the anchor name (without #) to find
+ * a $dynamicAnchor in the schema tree.
+ *
+ * e.g. "$dynamicRef": "#items" → find schema with "$dynamicAnchor": "items"
+ */
+export function resolveDynamicRef(
+  dynamicRef: string,
+  rootSchema: RawSchema,
+): RawSchema | undefined {
+  // Extract anchor name — remove leading "#"
+  const anchor = dynamicRef.startsWith("#") ? dynamicRef.slice(1) : dynamicRef;
+
+  if (!anchor) return rootSchema;
+
+  // Search the entire schema tree for a matching $dynamicAnchor
+  return findDynamicAnchor(anchor, rootSchema);
+}
+
+/**
+ * Build an $id index — map of $id URI → subschema.
+ * Used to resolve $ref URIs that aren't JSON Pointers.
+ */
+export function buildIdIndex(
+  schema: RawSchema,
+  index = new Map<string, RawSchema>(),
+): Map<string, RawSchema> {
+  if (typeof schema.$id === "string") {
+    index.set(schema.$id, schema);
+  }
+
+  // Recurse into known schema locations
+  if (schema.properties) {
+    for (const sub of Object.values(schema.properties)) {
+      if (isRawSchema(sub)) buildIdIndex(sub, index);
+    }
+  }
+
+  for (const key of ["definitions", "$defs"] as const) {
+    const defs = schema[key];
+    if (defs && typeof defs === "object") {
+      for (const sub of Object.values(defs)) {
+        if (isRawSchema(sub)) buildIdIndex(sub, index);
+      }
+    }
+  }
+
+  for (const key of ["allOf", "anyOf", "oneOf"] as const) {
+    for (const sub of schema[key] ?? []) {
+      if (isRawSchema(sub)) buildIdIndex(sub, index);
+    }
+  }
+
+  if (isRawSchema(schema.items)) {
+    buildIdIndex(schema.items, index);
+  }
+
+  return index;
+}
+
+/**
  * Check if a schema node is a $ref.
  */
 export function isRef(schema: RawSchema): boolean {
@@ -40,7 +97,14 @@ export function isRef(schema: RawSchema): boolean {
 }
 
 /**
- * Resolve a schema — if it's a $ref, follow it.
+ * Check if a schema node is a $dynamicRef.
+ */
+export function isDynamicRef(schema: RawSchema): boolean {
+  return typeof schema["$dynamicRef"] === "string";
+}
+
+/**
+ * Resolve a schema — handles both $ref and $dynamicRef.
  * Returns the resolved schema or the original if not a ref.
  * Handles circular refs by tracking visited refs.
  */
@@ -49,26 +113,91 @@ export function resolveSchema(
   rootSchema: RawSchema,
   visited = new Set<string>(),
 ): RawSchema {
-  if (!isRef(schema)) return schema;
+  // Handle $ref
+  if (isRef(schema)) {
+    const ref = schema["$ref"] as string;
 
-  const ref = schema["$ref"] as string;
+    if (visited.has(ref)) return schema;
+    visited.add(ref);
 
-  // Prevent infinite loops from circular refs
-  if (visited.has(ref)) return schema;
-  visited.add(ref);
+    const resolved = resolveRef(ref, rootSchema);
+    if (!resolved) return schema;
 
-  const resolved = resolveRef(ref, rootSchema);
-  if (!resolved) return schema;
+    return resolveSchema(resolved, rootSchema, visited);
+  }
 
-  // Recursively resolve in case the target is also a $ref
-  return resolveSchema(resolved, rootSchema, visited);
+  // Handle $dynamicRef
+  if (isDynamicRef(schema)) {
+    const dynamicRef = schema["$dynamicRef"] as string;
+    const key = `$dynamicRef:${dynamicRef}`;
+
+    if (visited.has(key)) return schema;
+    visited.add(key);
+
+    const resolved = resolveDynamicRef(dynamicRef, rootSchema);
+    if (!resolved) return schema;
+
+    return resolveSchema(resolved, rootSchema, visited);
+  }
+
+  return schema;
 }
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
 /**
- * Decode JSON Pointer escape sequences.
- * ~1 → /
- * ~0 → ~
+ * Recursively search a schema tree for a $dynamicAnchor value.
  */
+function findDynamicAnchor(
+  anchor: string,
+  schema: RawSchema,
+  visited = new Set<RawSchema>(),
+): RawSchema | undefined {
+  if (visited.has(schema)) return undefined;
+  visited.add(schema);
+
+  if (schema.$dynamicAnchor === anchor) return schema;
+
+  // Search definitions/$defs
+  for (const key of ["definitions", "$defs"] as const) {
+    const defs = schema[key];
+    if (defs && typeof defs === "object") {
+      for (const sub of Object.values(defs)) {
+        if (isRawSchema(sub)) {
+          const found = findDynamicAnchor(anchor, sub, visited);
+          if (found) return found;
+        }
+      }
+    }
+  }
+
+  // Search properties
+  if (schema.properties) {
+    for (const sub of Object.values(schema.properties)) {
+      if (isRawSchema(sub)) {
+        const found = findDynamicAnchor(anchor, sub, visited);
+        if (found) return found;
+      }
+    }
+  }
+
+  // Search allOf/anyOf/oneOf
+  for (const key of ["allOf", "anyOf", "oneOf"] as const) {
+    for (const sub of schema[key] ?? []) {
+      if (isRawSchema(sub)) {
+        const found = findDynamicAnchor(anchor, sub, visited);
+        if (found) return found;
+      }
+    }
+  }
+
+  return undefined;
+}
+
 function decodePointerSegment(segment: string): string {
   return segment.replace(/~1/g, "/").replace(/~0/g, "~");
+}
+
+function isRawSchema(value: unknown): value is RawSchema {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

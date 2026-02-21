@@ -28,6 +28,7 @@ import { formatDocument, formatRange } from "../json/formatter.js";
 // ── Register local schemas ────────────────────────────────────────────────────
 const PERSON_SCHEMA = {
   $schema: "http://json-schema.org/draft-07/schema#",
+  $id: "https://example.com/schemas/person.schema.json",
   type: "object" as const,
   properties: {
     name: {
@@ -99,6 +100,30 @@ registerSchema({
     required: ["name"],
   },
   pattern: "**/*.modern.json",
+});
+
+registerSchema({
+  uri: "https://example.com/schemas/dynamic.schema.json",
+  schema: {
+    $schema: "https://json-schema.org/draft/2020-12/schema",
+    $id: "https://example.com/schemas/dynamic.schema.json",
+    type: "object",
+    properties: {
+      items: { $dynamicRef: "#items" },
+    },
+    $defs: {
+      items: {
+        $dynamicAnchor: "items",
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          value: { type: "number" },
+        },
+        required: ["name"],
+      },
+    },
+  },
+  pattern: "**/*.dynamic.json",
 });
 
 // ── Load SchemaStore catalog at startup ───────────────────────────────────────
